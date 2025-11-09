@@ -318,88 +318,9 @@ for STATS_REPOSPEC in "${PROCESSED_REPOS[@]}"; do
     fi
 done
 
-# Generate aggregate index page
-cat << 'EOF_SCRIPT' > /tmp/generate_index.py
-import sys
-import json
-from datetime import datetime
-
-repos = json.loads(sys.argv[1])
-ghpages_prefix = sys.argv[2]
-ghpages_dir = sys.argv[3]
-
-html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Repository Statistics</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            max-width: 800px;
-            margin: 40px auto;
-            padding: 20px;
-            line-height: 1.6;
-        }}
-        h1 {{
-            border-bottom: 2px solid #333;
-            padding-bottom: 10px;
-        }}
-        .repo-list {{
-            list-style: none;
-            padding: 0;
-        }}
-        .repo-item {{
-            margin: 15px 0;
-            padding: 10px;
-            background: #f5f5f5;
-            border-radius: 5px;
-        }}
-        .repo-item a {{
-            text-decoration: none;
-            color: #0366d6;
-            font-size: 1.1em;
-        }}
-        .repo-item a:hover {{
-            text-decoration: underline;
-        }}
-        .timestamp {{
-            color: #666;
-            font-size: 0.9em;
-            margin-top: 20px;
-        }}
-    </style>
-</head>
-<body>
-    <h1>Repository Statistics</h1>
-    <p>Statistics and analytics for monitored repositories.</p>
-
-    <ol class="repo-list">
-"""
-
-for repo in repos:
-    repo_name = repo.split('/')[1]
-    html += f"""        <li class="repo-item">
-            <a href="{repo_name}/">{repo}</a>
-        </li>
-"""
-
-html += f"""    </ol>
-
-    <div class="timestamp">
-        <p>Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>
-    </div>
-</body>
-</html>
-"""
-
-print(html)
-EOF_SCRIPT
-
-# Generate the index page
+# Generate the index page using the standalone Python script
 REPOS_JSON_FOR_INDEX=$(printf '%s\n' "${PROCESSED_REPOS[@]}" | jq -R . | jq -s .)
-python /tmp/generate_index.py "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${GHPAGES_DIR}/index.html"
+python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${GHPAGES_DIR}/index.html"
 
 echo "Aggregate index page generated at ${GHPAGES_DIR}/index.html"
 
