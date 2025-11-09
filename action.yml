@@ -4,11 +4,11 @@ branding:
   icon: 'bar-chart-2'
   color: 'black'
 inputs:
-  repository:
+  repositories:
     description: >
-      Repository spec (<owner-or-org>/<reponame>) for the repository to fetch
-      statistics for.
-    default: ${{ github.repository }}
+      JSON array of repository specs (<owner-or-org>/<reponame>) to fetch
+      statistics for. Example: '["owner/repo1", "owner/repo2"]'
+    required: true
   ghtoken:
     description: >
       GitHub API token for reading the GitHub repository traffic API and
@@ -23,6 +23,11 @@ inputs:
       Set this if the data branch in the data repo is exposed via GitHub pages.
       Must not end with a slash. Example: https://jgehrcke.github.io/ghrs-test
     default: none
+  ghpagesdirectory:
+    description: >
+      Directory name for GitHub Pages output. All repo reports will be collected
+      here with an aggregate index page.
+    default: site
 runs:
   using: "docker"
   image: "Dockerfile"
