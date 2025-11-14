@@ -131,6 +131,13 @@ git config --local user.email "action@github.com"
 git config --local user.name "GitHub Action"
 set +x
 
+# ==============================================================================
+# Directory structure setup - use absolute paths to avoid confusion
+# ==============================================================================
+
+# WORKSPACE_ROOT: Root of the data repository where all stats are stored
+WORKSPACE_ROOT=$(pwd)
+
 # Array to track processed repos for aggregate index generation
 declare -a PROCESSED_REPOS=()
 
@@ -145,17 +152,21 @@ for STATS_REPOSPEC in "${STATS_REPOSPECS[@]}"; do
     # Extract repo name without owner for use in GitHub Pages structure
     REPO_NAME=$(echo "$STATS_REPOSPEC" | cut -d'/' -f2)
 
-    # Do not write to the root of the repository, but to a directory named after
-    # the stats respository (owner/repo). So that this data repository can be used
-    # by GHRS for more than one stats repository using the same git branch.
-    mkdir -p "${STATS_REPOSPEC}"
-    cd "${STATS_REPOSPEC}"
+    # REPO_DATA_DIR: Directory for this specific repo's data
+    # Structure: workspace/owner/repo/
+    REPO_DATA_DIR="${WORKSPACE_ROOT}/${STATS_REPOSPEC}"
 
-echo "operating in $(pwd)"
+    # Create and enter the repo data directory
+    mkdir -p "${REPO_DATA_DIR}"
+    cd "${REPO_DATA_DIR}"
 
-mkdir -p newsnapshots
-mkdir -p ghrs-data
-echo "fetch.py for ${STATS_REPOSPEC}"
+    echo "operating in $(pwd)"
+
+    # Create subdirectories for this repo's data
+    mkdir -p newsnapshots
+    mkdir -p ghrs-data
+
+    echo "fetch.py for ${STATS_REPOSPEC}"
 
 # Have CPython emit its stderr data immediately to the attached streams to
 # reduce the likelihood for bad order of log lines in the GH Action log viewer
@@ -285,10 +296,14 @@ EOF
     # Track this repo for aggregate index generation
     PROCESSED_REPOS+=("$STATS_REPOSPEC")
 
-    # Go back to root of data repo for next iteration
-    cd ..
-
 done  # End of repository processing loop
+
+# ==============================================================================
+# Generate unified GitHub Pages site with aggregate index
+# ==============================================================================
+
+# Return to workspace root for aggregate processing
+cd "${WORKSPACE_ROOT}"
 
 echo ""
 echo "========================================="
@@ -296,32 +311,39 @@ echo "All repositories processed. Generating aggregate index page."
 echo "========================================="
 echo ""
 
-# Create GitHub Pages directory structure and aggregate index
-mkdir -p "${GHPAGES_DIR}"
+# SITE_DIR: Directory for the unified GitHub Pages site
+SITE_DIR="${WORKSPACE_ROOT}/${GHPAGES_DIR}"
+mkdir -p "${SITE_DIR}"
 
 # Copy individual repo reports to GitHub Pages structure
 for STATS_REPOSPEC in "${PROCESSED_REPOS[@]}"; do
     REPO_NAME=$(echo "$STATS_REPOSPEC" | cut -d'/' -f2)
 
+    # Source: where the report was generated
+    REPO_REPORT_DIR="${WORKSPACE_ROOT}/${STATS_REPOSPEC}/latest-report"
+
+    # Destination: where it goes in the site
+    SITE_REPO_DIR="${SITE_DIR}/${REPO_NAME}"
+
     echo "Copying report for ${STATS_REPOSPEC} to ${GHPAGES_DIR}/${REPO_NAME}/"
 
-    # Create repo subdirectory in GitHub Pages directory
-    mkdir -p "${GHPAGES_DIR}/${REPO_NAME}"
+    # Create repo subdirectory in GitHub Pages site
+    mkdir -p "${SITE_REPO_DIR}"
 
     # Copy the HTML report as index.html for clean URLs
-    if [ -f "${STATS_REPOSPEC}/latest-report/report.html" ]; then
-        cp "${STATS_REPOSPEC}/latest-report/report.html" "${GHPAGES_DIR}/${REPO_NAME}/index.html"
+    if [ -f "${REPO_REPORT_DIR}/report.html" ]; then
+        cp "${REPO_REPORT_DIR}/report.html" "${SITE_REPO_DIR}/index.html"
     fi
 
     # Copy resources if they exist
-    if [ -d "${STATS_REPOSPEC}/latest-report/resources" ]; then
-        cp -r "${STATS_REPOSPEC}/latest-report/resources" "${GHPAGES_DIR}/${REPO_NAME}/"
+    if [ -d "${REPO_REPORT_DIR}/resources" ]; then
+        cp -r "${REPO_REPORT_DIR}/resources" "${SITE_REPO_DIR}/"
     fi
 done
 
-# Generate the index page using the standalone Python script
+# Generate the aggregate index page using the standalone Python script
 REPOS_JSON_FOR_INDEX=$(printf '%s\n' "${PROCESSED_REPOS[@]}" | jq -R . | jq -s .)
-python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${GHPAGES_DIR}/index.html"
+python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${SITE_DIR}/index.html"
 
 echo "Aggregate index page generated at ${GHPAGES_DIR}/index.html"
 
