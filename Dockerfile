@@ -3,6 +3,7 @@ FROM jgehrcke/github-repo-stats-base:e87aa5891
 COPY fetch.py /fetch.py
 COPY analyze.py /analyze.py
 COPY pdf.py /pdf.py
+COPY generate_aggregate_index.py /generate_aggregate_index.py
 COPY entrypoint.sh /entrypoint.sh
 COPY resources /resources
 
