@@ -1,8 +1,9 @@
 FROM jgehrcke/github-repo-stats-base:e87aa5891
 
-COPY fetch.py /fetch.py
-COPY analyze.py /analyze.py
-COPY pdf.py /pdf.py
+# Copy all Python scripts
+COPY *.py /
+
+# Copy shell scripts and resources
 COPY entrypoint.sh /entrypoint.sh
 COPY resources /resources
 

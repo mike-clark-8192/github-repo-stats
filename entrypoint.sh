@@ -24,8 +24,16 @@ GHRS_FILES_ROOT_PATH="${GHRS_FILES_ROOT_PATH:-/}"
 # The data repository and the repository to fetch statistics for do not
 # need to be the same!
 
-# This is the repository to fetch data for.
-STATS_REPOSPEC="${INPUT_REPOSITORY}"
+# Parse the JSON array of repositories to fetch data for.
+# INPUT_REPOSITORIES contains a JSON array like '["owner/repo1", "owner/repo2"]'
+REPOS_JSON="${INPUT_REPOSITORIES}"
+
+# Convert JSON array to bash array
+# Use jq to parse the JSON array (jq is available in the Docker image)
+mapfile -t STATS_REPOSPECS < <(echo "$REPOS_JSON" | jq -r '.[]')
+
+echo "Number of repositories to process: ${#STATS_REPOSPECS[@]}"
+echo "Repositories: ${STATS_REPOSPECS[@]}"
 
 # DATA_REPOSPEC is the repository to store data and report artifacts in.
 # GITHUB_REPOSITORY is an environment variable specifying the repository this
@@ -52,10 +60,14 @@ export GHRS_GITHUB_API_TOKEN="${INPUT_GHTOKEN}"
 # The name of the branch in the data repository.
 DATA_BRANCH_NAME="${INPUT_DATABRANCH}"
 
+# The directory for GitHub Pages output
+GHPAGES_DIR="${INPUT_GHPAGESDIRECTORY}"
+
 # for diagnosis
 echo "length of API TOKEN: ${#GHRS_GITHUB_API_TOKEN}"
-echo "STATS_REPOSPEC: $STATS_REPOSPEC"
 echo "DATA_REPOSPEC: $DATA_REPOSPEC"
+echo "DATA_BRANCH_NAME: $DATA_BRANCH_NAME"
+echo "GHPAGES_DIR: $GHPAGES_DIR"
 echo "UPDATE_ID: $UPDATE_ID"
 
 # I have seen in the wild that in some action workflows the current working
@@ -119,16 +131,42 @@ git config --local user.email "action@github.com"
 git config --local user.name "GitHub Action"
 set +x
 
-# Do not write to the root of the repository, but to a directory named after
-# the stats respository (owner/repo). So that this data repository can be used
-# by GHRS for more than one stats repository using the same git branch.
-mkdir -p "${STATS_REPOSPEC}"
-cd "${STATS_REPOSPEC}"
+# ==============================================================================
+# Directory structure setup - use absolute paths to avoid confusion
+# ==============================================================================
 
-echo "operating in $(pwd)"
+# WORKSPACE_ROOT: Root of the data repository where all stats are stored
+WORKSPACE_ROOT=$(pwd)
 
-mkdir -p newsnapshots
-echo "fetch.py for ${STATS_REPOSPEC}"
+# Array to track processed repos for aggregate index generation
+declare -a PROCESSED_REPOS=()
+
+# Loop through each repository to process
+for STATS_REPOSPEC in "${STATS_REPOSPECS[@]}"; do
+    echo ""
+    echo "========================================="
+    echo "Processing repository: $STATS_REPOSPEC"
+    echo "========================================="
+    echo ""
+
+    # Extract repo name without owner for use in GitHub Pages structure
+    REPO_NAME=$(echo "$STATS_REPOSPEC" | cut -d'/' -f2)
+
+    # REPO_DATA_DIR: Directory for this specific repo's data
+    # Structure: workspace/owner/repo/
+    REPO_DATA_DIR="${WORKSPACE_ROOT}/${STATS_REPOSPEC}"
+
+    # Create and enter the repo data directory
+    mkdir -p "${REPO_DATA_DIR}"
+    cd "${REPO_DATA_DIR}"
+
+    echo "operating in $(pwd)"
+
+    # Create subdirectories for this repo's data
+    mkdir -p newsnapshots
+    mkdir -p ghrs-data
+
+    echo "fetch.py for ${STATS_REPOSPEC}"
 
 # Have CPython emit its stderr data immediately to the attached streams to
 # reduce the likelihood for bad order of log lines in the GH Action log viewer
@@ -221,41 +259,98 @@ git commit -m "ghrs: vc agg ${UPDATE_ID} for ${STATS_REPOSPEC}" || echo "commit 
 git add ghrs-data/forks.csv ghrs-data/stargazers.csv || echo "git add failed, ignore (continue)"
 git commit -m "ghrs: stars and forks ${UPDATE_ID} for ${STATS_REPOSPEC}" || echo "commit failed, ignore  (continue)"
 
-echo "Translate HTML report into PDF, via headless Chrome"
-python "${GHRS_FILES_ROOT_PATH}/pdf.py" latest-report/report_for_pdf.html latest-report/report.pdf
-
-# Add directory contents (markdown, HTML, PDF).
+# Add directory contents (markdown, HTML).
 git add latest-report
 set +x
 
-echo "generate README.md"
-cat << EOF > README.md
+    echo "generate README.md"
+    cat << EOF > README.md
 ## github-repo-stats for ${STATS_REPOSPEC}
 
 - statistics for repository https://github.com/${STATS_REPOSPEC}
 - managed by GitHub Action: https://github.com/jgehrcke/github-repo-stats
 - workflow that created this README: \`${GITHUB_WORKFLOW}\`
 
-**Latest report PDF**: [GitHub-rendered](https://github.com/${DATA_REPOSPEC}/blob/${DATA_BRANCH_NAME}/${STATS_REPOSPEC}/latest-report/report.pdf), [raw](https://github.com/${DATA_REPOSPEC}/raw/${DATA_BRANCH_NAME}/${STATS_REPOSPEC}/latest-report/report.pdf)
+**Latest report (Markdown)**: [report.md](latest-report/report.md)
 
 EOF
 
-# If the GitHub pages prefix is set in the action config then add a link to
-# the HTML report to the README.
+    # If the GitHub pages prefix is set in the action config then add a link to
+    # the HTML report to the README.
 
-if [[ "${INPUT_GHPAGESPREFIX}" != "none" ]]; then
+    if [[ "${INPUT_GHPAGESPREFIX}" != "none" ]]; then
 
-cat << EOF >> README.md
+    cat << EOF >> README.md
 
-**Latest report HTML via GitHub pages**: [report.html](${INPUT_GHPAGESPREFIX}/${STATS_REPOSPEC}/latest-report/report.html)
+**Latest report HTML via GitHub pages**: [${INPUT_GHPAGESPREFIX}/${GHPAGES_DIR}/${REPO_NAME}/](${INPUT_GHPAGESPREFIX}/${GHPAGES_DIR}/${REPO_NAME}/)
 EOF
 
-fi
+    fi
 
 
+    set -x
+    git add README.md
+    git commit -m "ghrs: report ${UPDATE_ID} for ${STATS_REPOSPEC}"
+    set +x
+
+    # Track this repo for aggregate index generation
+    PROCESSED_REPOS+=("$STATS_REPOSPEC")
+
+done  # End of repository processing loop
+
+# ==============================================================================
+# Generate unified GitHub Pages site with aggregate index
+# ==============================================================================
+
+# Return to workspace root for aggregate processing
+cd "${WORKSPACE_ROOT}"
+
+echo ""
+echo "========================================="
+echo "All repositories processed. Generating aggregate index page."
+echo "========================================="
+echo ""
+
+# SITE_DIR: Directory for the unified GitHub Pages site
+SITE_DIR="${WORKSPACE_ROOT}/${GHPAGES_DIR}"
+mkdir -p "${SITE_DIR}"
+
+# Copy individual repo reports to GitHub Pages structure
+for STATS_REPOSPEC in "${PROCESSED_REPOS[@]}"; do
+    REPO_NAME=$(echo "$STATS_REPOSPEC" | cut -d'/' -f2)
+
+    # Source: where the report was generated
+    REPO_REPORT_DIR="${WORKSPACE_ROOT}/${STATS_REPOSPEC}/latest-report"
+
+    # Destination: where it goes in the site
+    SITE_REPO_DIR="${SITE_DIR}/${REPO_NAME}"
+
+    echo "Copying report for ${STATS_REPOSPEC} to ${GHPAGES_DIR}/${REPO_NAME}/"
+
+    # Create repo subdirectory in GitHub Pages site
+    mkdir -p "${SITE_REPO_DIR}"
+
+    # Copy the HTML report as index.html for clean URLs
+    if [ -f "${REPO_REPORT_DIR}/report.html" ]; then
+        cp "${REPO_REPORT_DIR}/report.html" "${SITE_REPO_DIR}/index.html"
+    fi
+
+    # Copy resources if they exist
+    if [ -d "${REPO_REPORT_DIR}/resources" ]; then
+        cp -r "${REPO_REPORT_DIR}/resources" "${SITE_REPO_DIR}/"
+    fi
+done
+
+# Generate the aggregate index page using the standalone Python script
+REPOS_JSON_FOR_INDEX=$(printf '%s\n' "${PROCESSED_REPOS[@]}" | jq -R . | jq -s .)
+python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${SITE_DIR}/index.html"
+
+echo "Aggregate index page generated at ${GHPAGES_DIR}/index.html"
+
+# Commit the GitHub Pages directory
 set -x
-git add README.md
-git commit -m "ghrs: report ${UPDATE_ID} for ${STATS_REPOSPEC}"
+git add "${GHPAGES_DIR}"
+git commit -m "ghrs: update GitHub Pages site ${UPDATE_ID}" || echo "commit failed, ignore (continue)"
 set +x
 
 if [ -z ${GHRS_TESTING+x} ]; then

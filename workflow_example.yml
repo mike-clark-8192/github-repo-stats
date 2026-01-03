@@ -1,0 +1,61 @@
+# Example workflow for using github-repo-stats with multiple repositories
+#
+# This workflow demonstrates how to use the restructured github-repo-stats action
+# that processes multiple repositories in a single run and generates a unified
+# GitHub Pages site.
+#
+# Features:
+# - Fetches all owned, non-fork, public repositories automatically
+# - Processes them sequentially in a single action run (no matrix needed)
+# - Generates a unified GitHub Pages site with an aggregate index
+# - Runs weekly and can be manually triggered
+
+name: my-repo-stats-ghrs
+concurrency: fetch-repository-stats
+
+on:
+  schedule:
+    # Run weekly on Saturdays at 10:00 UTC
+    - cron: "0 10 * * 6"
+  workflow_dispatch:
+
+jobs:
+  fetch-and-process-repos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch owned non-fork public repos
+        id: fetch-repos
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -x -e
+          echo 'Fetching repositories...'
+          # Fetch all owned, non-fork, public repositories
+          REPOS=$(gh repo list --json nameWithOwner,visibility,isFork -q '[.[] | select(.visibility=="PUBLIC" and .isFork==false) | .nameWithOwner]')
+          echo "repos=$REPOS" >> "$GITHUB_OUTPUT"
+          echo "Found repositories:"
+          echo "$REPOS" | jq -r '.[]'
+
+      - name: Run github-repo-stats for all repositories
+        uses: mike-clark-8192/github-repo-stats@RELEASE  # Replace with your fork and version
+        with:
+          repositories: ${{ steps.fetch-repos.outputs.repos }}
+          ghtoken: ${{ secrets.GITHUB_TOKEN }}
+          databranch: main  # Branch where data and reports will be stored
+          ghpagesprefix: https://your-username.github.io/your-repo  # Your GitHub Pages URL
+          ghpagesdirectory: site  # Directory for the unified GitHub Pages site
+
+# Notes:
+# 1. Replace 'mike-clark-8192/github-repo-stats@RELEASE' with your fork and tag/branch
+# 2. Update 'ghpagesprefix' with your actual GitHub Pages URL
+# 3. Make sure GitHub Pages is enabled for the 'databranch' in your repository settings
+# 4. The action will create:
+#    - {owner}/{repo}/ghrs-data/ - Data collection for each repo
+#    - {owner}/{repo}/latest-report/ - Individual reports
+#    - site/ - Unified GitHub Pages site
+#      - site/index.html - Aggregate page with links to all repos
+#      - site/{repo}/ - Individual repo statistics pages
+# 5. You can use a personal access token instead of GITHUB_TOKEN if needed:
+#    - Create a PAT with 'repo' scope
+#    - Add it as a secret (e.g., GHRS_TOKEN)
+#    - Use: ghtoken: ${{ secrets.GHRS_TOKEN }}
