@@ -175,12 +175,12 @@ def collect_repo_stats(workspace_root: str, repos: list) -> list:
         )
 
         # Determine if repo has meaningful activity
-        # Crickets = repos with no views, no stars, and only minimal clones (≤3)
+        # Crickets = repos with no views, no stars, and only minimal clones (≤2)
         repo_stats.has_activity = (
             repo_stats.views_unique > 0
             or repo_stats.stars > 0
             or repo_stats.forks > 0
-            or repo_stats.clones_unique >= 4
+            or repo_stats.clones_unique >= 3
         )
 
         stats.append(repo_stats)
