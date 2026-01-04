@@ -341,9 +341,10 @@ for STATS_REPOSPEC in "${PROCESSED_REPOS[@]}"; do
     fi
 done
 
-# Generate the aggregate index page using the standalone Python script
+# Generate the aggregate index page (dashboard) using the standalone Python script
+# Pass workspace root so it can read CSV data for sparklines and stats
 REPOS_JSON_FOR_INDEX=$(printf '%s\n' "${PROCESSED_REPOS[@]}" | jq -R . | jq -s .)
-python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" > "${SITE_DIR}/index.html"
+python "${GHRS_FILES_ROOT_PATH}/generate_aggregate_index.py" "$REPOS_JSON_FOR_INDEX" "${INPUT_GHPAGESPREFIX}" "${GHPAGES_DIR}" "${WORKSPACE_ROOT}" > "${SITE_DIR}/index.html"
 
 echo "Aggregate index page generated at ${GHPAGES_DIR}/index.html"
 
