@@ -11,7 +11,7 @@ import sys
 import json
 import os
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Optional
 
@@ -77,7 +77,7 @@ def read_views_clones(repo_path: str, days: int = 14) -> tuple:
     if not os.path.exists(csv_path):
         return views_series, clones_series, views_total, views_unique, clones_total, clones_unique
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
@@ -108,7 +108,7 @@ def read_cumulative_series(csv_path: str, value_col: str, days: int = 90) -> tup
     if not os.path.exists(csv_path):
         return series, current_value, growth
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     all_values = []
 
     try:
@@ -162,10 +162,15 @@ def collect_repo_stats(workspace_root: str, repos: list) -> list:
             repo_stats.clones_unique,
         ) = read_views_clones(repo_path)
 
-        # Read stars
+        # Read stars (prefer stargazers.csv, fall back to stargazer-snapshots.csv)
         stars_path = os.path.join(repo_path, "ghrs-data", "stargazers.csv")
+        if not os.path.exists(stars_path):
+            stars_path = os.path.join(repo_path, "ghrs-data", "stargazer-snapshots.csv")
+            stars_col = "stargazers_cumulative_snapshot"
+        else:
+            stars_col = "stars_cumulative"
         repo_stats.stars_series, repo_stats.stars, repo_stats.stars_growth = read_cumulative_series(
-            stars_path, "stars_cumulative"
+            stars_path, stars_col
         )
 
         # Read forks
@@ -199,11 +204,15 @@ def generate_sparkline_svg(
     color1: str = "#c95d2e",
     color2: str = "#d4a03c",
     cumulative: bool = False,
-) -> str:
-    """Generate an SVG sparkline with one or two series."""
+) -> tuple:
+    """Generate an SVG sparkline with one or two series.
+
+    Returns (svg_html, has_data, min_val, max_val).
+    """
     if not series1 and not series2:
         # Empty placeholder
-        return f'<svg viewBox="0 0 {width} {height}" class="sparkline"><text x="{width//2}" y="{height//2 + 4}" text-anchor="middle" fill="#999" font-size="10">no data</text></svg>'
+        svg = f'<svg viewBox="0 0 {width} {height}" class="sparkline"><text x="{width//2}" y="{height//2 + 4}" text-anchor="middle" fill="#999" font-size="10">no data</text></svg>'
+        return svg, False, 0, 0
 
     # Combine series for scaling
     all_values = list(series1) if series1 else []
@@ -211,7 +220,8 @@ def generate_sparkline_svg(
         all_values.extend(series2)
 
     if not all_values or max(all_values) == 0:
-        return f'<svg viewBox="0 0 {width} {height}" class="sparkline"><line x1="0" y1="{height-4}" x2="{width}" y2="{height-4}" stroke="#ddd" stroke-width="1"/></svg>'
+        svg = f'<svg viewBox="0 0 {width} {height}" class="sparkline"><line x1="0" y1="{height-4}" x2="{width}" y2="{height-4}" stroke="#ddd" stroke-width="1"/></svg>'
+        return svg, False, 0, 0
 
     min_val = min(all_values) if cumulative else 0
     max_val = max(all_values)
@@ -246,7 +256,7 @@ def generate_sparkline_svg(
         )
 
     svg_parts.append("</svg>")
-    return "".join(svg_parts)
+    return "".join(svg_parts), True, min_val, max_val
 
 
 def format_number(n: int) -> str:
@@ -259,7 +269,7 @@ def format_number(n: int) -> str:
 def generate_repo_card(repo: RepoStats, ghpages_dir: str) -> str:
     """Generate HTML for a single repository card."""
     # Traffic sparkline (views solid, clones dashed)
-    traffic_spark = generate_sparkline_svg(
+    traffic_spark, traffic_has_data, traffic_min, traffic_max = generate_sparkline_svg(
         repo.views_series,
         repo.clones_series,
         color1="#c95d2e",  # orange - views
@@ -267,7 +277,7 @@ def generate_repo_card(repo: RepoStats, ghpages_dir: str) -> str:
     )
 
     # Growth sparkline (stars solid, forks dashed)
-    growth_spark = generate_sparkline_svg(
+    growth_spark, growth_has_data, growth_min, growth_max = generate_sparkline_svg(
         repo.stars_series,
         repo.forks_series,
         color1="#e8b923",  # gold - stars
@@ -282,6 +292,20 @@ def generate_repo_card(repo: RepoStats, ghpages_dir: str) -> str:
     elif repo.stars_growth < 0:
         growth_text = f'<span class="growth negative">{repo.stars_growth} stars</span>'
 
+    traffic_data_attr = ' data-has-data="1"' if traffic_has_data else ""
+    growth_data_attr = ' data-has-data="1"' if growth_has_data else ""
+
+    traffic_axis_labels = (
+        f'<span class="axis-label axis-max">{format_number(traffic_max)}</span>'
+        f'<span class="axis-label axis-min">{format_number(traffic_min)}</span>'
+        if traffic_has_data else ""
+    )
+    growth_axis_labels = (
+        f'<span class="axis-label axis-max">{format_number(growth_max)}</span>'
+        f'<span class="axis-label axis-min">{format_number(growth_min)}</span>'
+        if growth_has_data else ""
+    )
+
     return f"""
     <a href="{repo.name}/" class="card-link">
       <div class="card">
@@ -293,17 +317,23 @@ def generate_repo_card(repo: RepoStats, ghpages_dir: str) -> str:
           </span>
         </div>
         <div class="card-body">
-          <div class="chart-section">
+          <div class="chart-section"{traffic_data_attr}>
             <div class="chart-label">Traffic <span class="period">(14d)</span></div>
-            {traffic_spark}
+            <div class="sparkline-wrap">
+              {traffic_spark}
+              {traffic_axis_labels}
+            </div>
             <div class="chart-stats">
               <span class="views">👁 {format_number(repo.views_unique)}</span>
               <span class="clones">📋 {format_number(repo.clones_unique)}</span>
             </div>
           </div>
-          <div class="chart-section">
+          <div class="chart-section"{growth_data_attr}>
             <div class="chart-label">Growth <span class="period">(90d)</span></div>
-            {growth_spark}
+            <div class="sparkline-wrap">
+              {growth_spark}
+              {growth_axis_labels}
+            </div>
             <div class="chart-stats">
               {growth_text if growth_text else '<span class="neutral">—</span>'}
             </div>
@@ -351,7 +381,7 @@ def generate_dashboard_html(repos: list, ghpages_prefix: str, ghpages_dir: str, 
             if i < max_len:
                 agg_clones[i] += c
 
-    agg_traffic_spark = generate_sparkline_svg(
+    agg_traffic_spark, _, _, _ = generate_sparkline_svg(
         agg_views, agg_clones, width=200, height=40, color1="#c95d2e", color2="#d4a03c"
     )
 
@@ -371,7 +401,7 @@ def generate_dashboard_html(repos: list, ghpages_prefix: str, ghpages_dir: str, 
     </div>
     """
 
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -660,6 +690,52 @@ def generate_dashboard_html(repos: list, ghpages_prefix: str, ghpages_dir: str, 
       opacity: 1;
     }}
 
+    /* Sparkline wrap (positions axis labels) */
+    .sparkline-wrap {{
+      position: relative;
+    }}
+
+    .axis-label {{
+      display: none;
+      position: absolute;
+      right: 2px;
+      font-size: 0.65rem;
+      color: var(--brown-light);
+      opacity: 0.7;
+      pointer-events: none;
+      line-height: 1;
+    }}
+
+    .axis-max {{
+      top: 0;
+    }}
+
+    .axis-min {{
+      bottom: 0;
+    }}
+
+    /* Clickable charts */
+    .chart-section[data-has-data] {{
+      cursor: pointer;
+    }}
+
+    /* Expanded state */
+    .card.expanded .card-body {{
+      display: block;
+    }}
+
+    .card.expanded .chart-section:not(.expanded) {{
+      display: none;
+    }}
+
+    .card.expanded .chart-section.expanded .sparkline {{
+      height: 80px;
+    }}
+
+    .card.expanded .chart-section.expanded .axis-label {{
+      display: block;
+    }}
+
     /* Footer */
     .dashboard-footer {{
       text-align: center;
@@ -708,6 +784,23 @@ def generate_dashboard_html(repos: list, ghpages_prefix: str, ghpages_dir: str, 
       Last updated: {timestamp} · {len(stats)} repositories
     </div>
   </div>
+  <script>
+    document.querySelectorAll('.chart-section[data-has-data]').forEach(function(sec) {{
+      sec.addEventListener('click', function(e) {{
+        e.preventDefault();
+        e.stopPropagation();
+        var card = sec.closest('.card');
+        if (card.classList.contains('expanded') && sec.classList.contains('expanded')) {{
+          card.classList.remove('expanded');
+          sec.classList.remove('expanded');
+        }} else {{
+          card.querySelectorAll('.chart-section').forEach(function(s) {{ s.classList.remove('expanded'); }});
+          card.classList.add('expanded');
+          sec.classList.add('expanded');
+        }}
+      }});
+    }});
+  </script>
 </body>
 </html>
 """
